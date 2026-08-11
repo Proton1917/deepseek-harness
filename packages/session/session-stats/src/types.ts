@@ -32,10 +32,6 @@ export interface SessionStatsProjection {
   ttftMs: number
   /** Steps carrying a recorded first token. */
   ttftSteps: number
-  /** Summed decode wall time (first token → `assistant/message`) over steps that also report output tokens. */
-  decodeMs: number
-  /** Summed provider output tokens over the same decode-timed steps. */
-  decodeTokens: number
 }
 
 declare module '@deepseek-ai/dsh-session-projection/types' {

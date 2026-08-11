@@ -2,8 +2,9 @@
 // StatsLine (composer.dock entry): totals derivation + the RFC hard
 // acceptance — zero renders during streaming.
 
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { act, cleanup, fireEvent, render } from '@testing-library/react'
+import { afterEach, describe, expect, it } from 'vitest'
+import { act, cleanup, render } from '@testing-library/react'
+import { useSyncExternalStore } from 'react'
 import type {
   AssistantMessageNode, ConversationSnapshot, SessionId, ToolResultNode,
 } from '@deepseek-ai/dsh-client-runtime/client'
@@ -12,7 +13,10 @@ import { bindSnapshotSelector } from '@deepseek-ai/dsh-client-web-react'
 import { makeTranslate } from '@deepseek-ai/dsh-client-test-runtime'
 import { en as commonEn } from '@deepseek-ai/dsh-client-locale/src/locales/en.ts'
 import { zh as commonZh } from '@deepseek-ai/dsh-client-locale/src/locales/zh.ts'
-import { StatsLine, contextOccupancy, deriveStats, formatDuration, formatTokens, type StatsLineProps } from '../src/client/chat/StatsLine.tsx'
+import {
+  StatsLine, contextOccupancy, deriveStats, formatDuration, formatFullTokens, formatTokens,
+  type StatsLineProps,
+} from '../src/client/chat/StatsLine.tsx'
 import { en, zh } from '../src/client/locales.ts'
 import { chatSnapshotFixture } from './chat-snapshot-fixture.client.ts'
 
@@ -20,20 +24,7 @@ import { chatSnapshotFixture } from './chat-snapshot-fixture.client.ts'
 const t: StatsLineProps['t'] = makeTranslate(zh, commonZh)
 const tEn: StatsLineProps['t'] = makeTranslate(en, commonEn)
 
-/** jsdom has no ResizeObserver; StatsLine watches its row for ellipsis truncation through one. */
-class ResizeObserverStub {
-  observe(): void {}
-  unobserve(): void {}
-  disconnect(): void {}
-}
-
-beforeEach(() => { vi.stubGlobal('ResizeObserver', ResizeObserverStub) })
-afterEach(() => {
-  cleanup()
-  vi.unstubAllGlobals()
-  vi.restoreAllMocks()
-  vi.useRealTimers()
-})
+afterEach(cleanup)
 
 const SID = 's1' as SessionId
 
@@ -101,10 +92,9 @@ describe('deriveStats', () => {
     // The window fold's counts are only the fallback for assemblies without
     // the sessionStats projection; the paged window is not an accounting
     // source either, so the fold exposes no billing fields (billing rides the
-    // tokenUsage projection); decodeTokens is a throughput input, not a
-    // billed total.
+    // tokenUsage projection).
     expect(Object.keys(stats).sort()).toEqual(
-      ['decodeMs', 'decodeTokens', 'llmMs', 'steps', 'toolMs', 'ttftMs', 'ttftSteps', 'turns'],
+      ['llmMs', 'steps', 'toolMs', 'ttftMs', 'ttftSteps', 'turns'],
     )
   })
 
@@ -136,7 +126,7 @@ describe('deriveStats', () => {
     expect(stats.toolMs).toBe(3_000)
   })
 
-  it('sums ttft per recorded step and decode throughput inputs per usage-carrying step', () => {
+  it('sums ttft per recorded step', () => {
     const sampled: AssistantMessageNode = {
       ...assistant(1, 1, { outputTokens: 40 }),
       timing: { stepStartTime: 1_000, firstTokenTime: 1_800, completedTime: 4_800 },
@@ -148,9 +138,6 @@ describe('deriveStats', () => {
     const stats = deriveStats([sampled, ttftOnly, assistant(3, 2)])
     expect(stats.ttftMs).toBe(1_200)
     expect(stats.ttftSteps).toBe(2)
-    // The usage-less step contributes no decode share, keeping the ratio honest.
-    expect(stats.decodeMs).toBe(3_000)
-    expect(stats.decodeTokens).toBe(40)
   })
 })
 
@@ -158,8 +145,11 @@ describe('formatters', () => {
   it('formats token counts compactly', () => {
     expect(formatTokens(517)).toBe('517')
     expect(formatTokens(12_240)).toBe('12.2K')
-    expect(formatTokens(517_000)).toBe('517K')
+    expect(formatTokens(116_000)).toBe('116.0K')
+    expect(formatTokens(116_100)).toBe('116.1K')
+    expect(formatTokens(517_000)).toBe('517.0K')
     expect(formatTokens(1_230_000)).toBe('1.2M')
+    expect(formatFullTokens(7_617_400)).toBe('7,617,400')
   })
 
   it('formats durations under and over a minute', () => {
@@ -174,7 +164,7 @@ describe('StatsLine', () => {
   /** A whole-log sessionStats value: zeros plus overrides. */
   function sessionStats(overrides: Record<string, number>): Record<string, number> {
     return {
-      turns: 0, steps: 0, llmMs: 0, toolMs: 0, ttftMs: 0, ttftSteps: 0, decodeMs: 0, decodeTokens: 0,
+      turns: 0, steps: 0, llmMs: 0, toolMs: 0, ttftMs: 0, ttftSteps: 0,
       ...overrides,
     }
   }
@@ -191,12 +181,36 @@ describe('StatsLine', () => {
     return { useSession: bindSnapshotSelector(source), useProjection: projections(values), t: tEn }
   }
 
+  /** Reactive projection seat mirroring higher-seq push frames at component level. */
+  function liveProjections(initial: Record<string, unknown>): {
+    useProjection: StatsLineProps['useProjection']
+    set(key: string, value: unknown): void
+  } {
+    const values = { ...initial }
+    const subscribers = new Set<() => void>()
+    const useProjection = ((key: string): unknown => useSyncExternalStore(
+      (callback) => {
+        subscribers.add(callback)
+        return () => { subscribers.delete(callback) }
+      },
+      () => values[key],
+    )) as StatsLineProps['useProjection']
+    return {
+      useProjection,
+      set(key, value) {
+        values[key] = value
+        for (const subscriber of [...subscribers]) subscriber()
+      },
+    }
+  }
+
   it('renders the grouped stats row and hides a brand-new empty session', () => {
     const { source } = makeSource({ nodes: [assistant(1, 1)] })
     const view = render(<StatsLine {...props(source)} />)
     // No timing on the fixture: the duration group drops out whole. Tokens come
     // from the projection, so paging the window cannot change them.
-    expect(view.container.textContent).toBe('1 turns · 1 steps| Cache hit 90%| Input 100 tok · Output 5 tok')
+    expect(view.container.textContent)
+      .toBe('1 turns · 1 steps| Cache hit 90%| Input 100 tok · Output 5 tok · Total 105 tok')
     const empty = makeSource()
     const emptyView = render(<StatsLine {...props(empty.source, {
       tokenUsage: { uncachedInputTokens: 0, outputTokens: 0, cacheReadTokens: 0, cacheWriteTokens: 0 },
@@ -205,38 +219,15 @@ describe('StatsLine', () => {
     expect(emptyView.container.textContent).toBe('')
   })
 
-  it('reveals the full line in a delayed hover tooltip only while the row is clipped', () => {
-    vi.useFakeTimers()
-    // jsdom lays nothing out; fake a row narrower than its content.
-    vi.spyOn(Element.prototype, 'scrollWidth', 'get').mockReturnValue(800)
-    vi.spyOn(Element.prototype, 'clientWidth', 'get').mockReturnValue(400)
-    const { source } = makeSource({ nodes: [assistant(1, 1)] })
-    const view = render(<StatsLine {...props(source)} />)
-    fireEvent.mouseEnter(view.container.firstElementChild!)
-    act(() => { vi.advanceTimersByTime(499) })
-    expect(view.container.querySelector('[role="tooltip"]')).toBeNull()
-    act(() => { vi.advanceTimersByTime(1) })
-    expect(view.container.querySelector('[role="tooltip"]')?.textContent)
-      .toBe('1 turns · 1 steps | Cache hit 90% | Input 100 tok · Output 5 tok')
-  })
-
-  it('suppresses the tooltip while the row fits without truncation', () => {
-    vi.useFakeTimers()
-    const { source } = makeSource({ nodes: [assistant(1, 1)] })
-    const view = render(<StatsLine {...props(source)} />)
-    fireEvent.mouseEnter(view.container.firstElementChild!)
-    act(() => { vi.advanceTimersByTime(500) })
-    expect(view.container.querySelector('[role="tooltip"]')).toBeNull()
-  })
-
-  it('renders window latency and throughput beside the wall-time group', () => {
+  it('renders window latency beside the wall-time group without derived throughput', () => {
     const timed: AssistantMessageNode = {
       ...assistant(1, 1, { outputTokens: 60 }),
       timing: { stepStartTime: 1_000, firstTokenTime: 1_800, completedTime: 4_800 },
     }
     const { source } = makeSource({ nodes: [timed] })
     const view = render(<StatsLine {...props(source)} />)
-    expect(view.container.textContent).toContain('LLM 3.8s| TTFT avg 0.8s · 20 tok/s')
+    expect(view.container.textContent).toContain('LLM 3.8s| TTFT avg 0.8s| Cache hit')
+    expect(view.container.textContent).not.toContain('tok/s')
   })
 
   it('takes every stats label from the active locale', () => {
@@ -247,13 +238,7 @@ describe('StatsLine', () => {
     const { source } = makeSource({ nodes: [timed] })
     const view = render(<StatsLine {...props(source)} t={t} />)
     expect(view.container.textContent)
-      .toBe('1 轮 · 1 步| LLM 3.8s| 首 token 平均 0.8s · 20 tok/s| 缓存命中 90%| 输入 100 tok · 输出 5 tok')
-  })
-
-  it('renders without ResizeObserver support', () => {
-    vi.unstubAllGlobals()
-    const { source } = makeSource({ nodes: [assistant(1, 1)] })
-    expect(() => render(<StatsLine {...props(source)} />)).not.toThrow()
+      .toBe('1 轮 · 1 步| LLM 3.8s| 首 token 平均 0.8s| 缓存命中 90%| 输入 100 tok · 输出 5 tok · 总计 105 tok')
   })
 
   it('keeps durable token groups after the visible step window is empty', () => {
@@ -264,7 +249,7 @@ describe('StatsLine', () => {
     })} />)
     // Context occupancy lives on the composer's ContextMeter ring, not here.
     expect(view.container.textContent)
-      .toBe('Cache hit 90%| Input 100 tok · Output 5 tok')
+      .toBe('Cache hit 90%| Input 100 tok · Output 5 tok · Total 105 tok')
   })
 
   it('computes context occupancy only when both a numerator and capacity are known', () => {
@@ -300,7 +285,7 @@ describe('StatsLine', () => {
       sessionStats: sessionStats({ turns: 10, steps: 89 }),
     })} />)
     expect(view.container.textContent)
-      .toBe('10 turns · 89 steps| Cache hit 90%| Input 100 tok · Output 5 tok')
+      .toBe('10 turns · 89 steps| Cache hit 90%| Input 100 tok · Output 5 tok · Total 105 tok')
   })
 
   it('treats a defined zero-count projection as empty, not as fallback', () => {
@@ -334,23 +319,23 @@ describe('StatsLine', () => {
       sessionStats: sessionStats({ turns: 7, steps: 44 }),
     })} />)
     expect(view.container.textContent)
-      .toBe('7 turns · 44 steps| Cache hit 90%| Input 100 tok · Output 5 tok')
+      .toBe('7 turns · 44 steps| Cache hit 90%| Input 100 tok · Output 5 tok · Total 105 tok')
   })
 
-  it('renders whole-log wall times and speeds from the projection, not the loaded window', () => {
-    // The 加载更早 hazard beyond counts: LLM/tool durations and the TTFT and
-    // throughput figures must not grow per loaded page either. An untimed
-    // 1-node window renders the projection's whole-log figures verbatim.
+  it('renders whole-log wall times and TTFT from the projection, not the loaded window', () => {
+    // The loading-earlier hazard beyond counts: LLM/tool durations and TTFT
+    // must not grow per loaded page either. An untimed one-node window renders
+    // the projection's whole-log figures verbatim.
     const { source } = makeSource({ nodes: [assistant(1, 1)] })
     const view = render(<StatsLine {...props(source, {
       tokenUsage: USAGE,
       sessionStats: sessionStats({
         turns: 200, steps: 200, llmMs: 100_000, toolMs: 62_000,
-        ttftMs: 1_600, ttftSteps: 2, decodeMs: 3_000, decodeTokens: 60,
+        ttftMs: 1_600, ttftSteps: 2,
       }),
     })} />)
     expect(view.container.textContent).toBe(
-      '200 turns · 200 steps| LLM 1m40s · Tool call 1m2s| TTFT avg 0.8s · 20 tok/s| Cache hit 90%| Input 100 tok · Output 5 tok',
+      '200 turns · 200 steps| LLM 1m40s · Tool call 1m2s| TTFT avg 0.8s| Cache hit 90%| Input 100 tok · Output 5 tok · Total 105 tok',
     )
   })
 
@@ -359,7 +344,7 @@ describe('StatsLine', () => {
     const view = render(<StatsLine {...props(source, {
       tokenUsage: { uncachedInputTokens: 0, outputTokens: 7, cacheReadTokens: 0, cacheWriteTokens: 0 },
     })} />)
-    expect(view.container.textContent).toBe('1 turns · 1 steps| Input 0 tok · Output 7 tok')
+    expect(view.container.textContent).toBe('1 turns · 1 steps| Input 0 tok · Output 7 tok · Total 7 tok')
   })
 
   it('includes cache writes in billed input and the cache-hit denominator', () => {
@@ -373,7 +358,51 @@ describe('StatsLine', () => {
       },
     })} />)
     expect(view.container.textContent)
-      .toBe('1 turns · 1 steps| Cache hit 45%| Input 200 tok · Output 7 tok')
+      .toBe('1 turns · 1 steps| Cache hit 45%| Input 200 tok · Output 7 tok · Total 207 tok')
+  })
+
+  it('keeps the combined total unabridged while input and output stay compact', () => {
+    const { source } = makeSource({ nodes: [assistant(1, 1)] })
+    const view = render(<StatsLine {...props(source, {
+      tokenUsage: {
+        uncachedInputTokens: 7_500_000,
+        outputTokens: 117_400,
+        cacheReadTokens: 0,
+        cacheWriteTokens: 0,
+      },
+    })} />)
+    expect(view.container.textContent)
+      .toContain('Input 7.5M tok · Output 117.4K tok · Total 7,617,400 tok')
+  })
+
+  it('updates estimated input and output from live projection frames', () => {
+    const { source } = makeSource({ nodes: [assistant(1, 1)] })
+    const live = liveProjections({
+      tokenUsage: USAGE,
+      liveTokenUsage: { ...USAGE, outputTokens: 6, estimated: true },
+    })
+    const view = render(
+      <StatsLine useSession={bindSnapshotSelector(source)} useProjection={live.useProjection} t={tEn} />,
+    )
+    expect(view.container.textContent)
+      .toBe('1 turns · 1 steps| Cache hit 90%| Input ~100 tok · Output ~6 tok · Total ~106 tok')
+
+    act(() => {
+      live.set('liveTokenUsage', {
+        uncachedInputTokens: 12,
+        outputTokens: 8,
+        cacheReadTokens: 90,
+        cacheWriteTokens: 0,
+        estimated: true,
+        tokensPerSecond: 42.64,
+      })
+    })
+    expect(view.container.textContent)
+      .toBe('1 turns · 1 steps| Cache hit 90%| Input ~102 tok · Output ~8 tok · Total ~110 tok')
+
+    act(() => { live.set('liveTokenUsage', { ...USAGE, estimated: false }) })
+    expect(view.container.textContent)
+      .toBe('1 turns · 1 steps| Cache hit 90%| Input 100 tok · Output 5 tok · Total 105 tok')
   })
 
   it('renders ZERO times during streaming chunk frames (RFC hard acceptance)', () => {

@@ -18,6 +18,22 @@ export interface TokenUsageProjection {
 }
 
 /**
+ * Continuously updated session totals for the composer status display.
+ *
+ * A producer may publish heuristic buckets while a request is active and
+ * replace them with provider usage when available. `estimated` remains true
+ * when any visible bucket still contains a heuristic value. Throughput
+ * describes the active or latest response from its first output-bearing chunk
+ * to its newest sample.
+ */
+export interface LiveTokenUsageProjection extends TokenUsageProjection {
+  /** Whether any displayed input/output bucket still contains an estimate. */
+  estimated: boolean
+  /** Output throughput for the active or latest response, when elapsed time is measurable. */
+  tokensPerSecond?: number
+}
+
+/**
  * Approximate context occupancy for a status display.
  *
  * The fields, when present, are deliberately NOT one atomic request
@@ -69,6 +85,8 @@ declare module '@deepseek-ai/dsh-session-projection/types' {
   interface SessionProjectionMap {
     /** Provider-reported usage accumulated across the complete durable log. */
     tokenUsage: TokenUsageProjection
+    /** Live cumulative usage, estimated during streaming and provider-corrected when available. */
+    liveTokenUsage: LiveTokenUsageProjection
     /** Newest request pressure paired with the newest known route capacity. */
     contextPressure: ContextPressureProjection
     /** Heuristic system/tools/message composition of the next request. */

@@ -1,12 +1,10 @@
-/* Session stats row: 12/20 tertiary text under the flow, aligned to the
-   shared message column axis (--dsh-chat-content-width). */
+/* Session stats row: 12/20 tertiary text under the flow, centered on the
+   shared message column axis with extra room for cumulative totals. */
 
 .root {
-  /* Block, not flex: text-overflow only elides a block's inline content, so
-     an overlong line ends in … instead of a mid-glyph clip. */
   display: block;
   text-align: center;
-  max-width: var(--dsh-chat-content-width);
+  max-width: calc(var(--dsh-chat-content-width) + 224px);
   width: 100%;
   margin: 0 auto;
   box-sizing: border-box;
@@ -15,11 +13,9 @@
   line-height: 20px;
   color: var(--dsw-alias-label-tertiary);
   white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
 }
 
 .sep {
   color: var(--dsw-alias-separator-primary);
-  margin: 0 10px; /* carries the former flex gap */
+  margin: 0 8px;
 }

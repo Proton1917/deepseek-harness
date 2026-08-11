@@ -2,15 +2,15 @@
 // Mounted on 'conversation.composer.dock' so it sticks with the composer in the
 // active conversation scrollport (see ConversationRoot data-conversation-scroll).
 
-import { Fragment, memo, useLayoutEffect, useMemo, useRef, useState } from 'react'
-import { Tooltip } from '@deepseek-ai/dsh-client-ui-primitives'
+import { Fragment, memo, useMemo } from 'react'
 import type { ConversationSnapshot, UseProjection } from '@deepseek-ai/dsh-client-runtime/client'
 import type { SnapshotSelectorHook } from '@deepseek-ai/dsh-client-ui-slots'
 // Type-only: merges the sessionStats key into SessionProjectionMap for useProjection.
 import type {} from '@deepseek-ai/dsh-session-stats/client'
-import type { ContextPressureProjection, TokenUsageProjection } from '@deepseek-ai/dsh-token-meter/client'
+import type {
+  ContextPressureProjection, LiveTokenUsageProjection, TokenUsageProjection,
+} from '@deepseek-ai/dsh-token-meter/client'
 import type { ComposerBarProps } from '../contract/slots.ts'
-import { formatTokensPerSecond } from './message-chrome.ts'
 import { assistantStepReading } from './turn-metrics.ts'
 import css from './StatsLine.module.css'
 
@@ -25,21 +25,16 @@ interface WindowStats {
   ttftMs: number
   /** Steps carrying a recorded TTFT. */
   ttftSteps: number
-  /** Summed decode wall time over steps that also report output tokens. */
-  decodeMs: number
-  /** Summed output tokens over the same decode-timed steps. */
-  decodeTokens: number
 }
 
 /**
  * Fold assistant and tool-result nodes into window-scoped display totals —
  * the FALLBACK for assemblies without the `sessionStats` projection.
  *
- * Every displayed figure rides that durable whole-log projection (and token
- * accounting rides `tokenUsage`) because the window is paged and compaction
- * rewrites it; this fold answers "what is on screen" only when no projection
- * value is served. Its field names deliberately mirror the projection's so
- * the two swap wholesale.
+ * Counts and wall times normally ride the durable whole-log projection (and
+ * token accounting rides token-meter projections) because the window is paged
+ * and compaction rewrites it. This fold answers "what is on screen" only when
+ * no session-stats value is served.
  * @param nodes - snapshot nodes.
  * @returns fallback counts and summed wall times.
  */
@@ -50,8 +45,6 @@ export function deriveStats(nodes: ConversationSnapshot['nodes']): WindowStats {
   let toolMs = 0
   let ttftMs = 0
   let ttftSteps = 0
-  let decodeMs = 0
-  let decodeTokens = 0
   for (const node of nodes) {
     if (node.kind === 'tool-result') {
       if (node.callTime !== null) toolMs += Math.max(0, node.time - node.callTime)
@@ -68,16 +61,12 @@ export function deriveStats(nodes: ConversationSnapshot['nodes']): WindowStats {
       ttftMs += reading.ttftMs
       ttftSteps += 1
     }
-    if (reading.decodeMs !== null && reading.outputTokens !== null) {
-      decodeMs += reading.decodeMs
-      decodeTokens += reading.outputTokens
-    }
   }
-  return { turns: turns.size, steps, llmMs, toolMs, ttftMs, ttftSteps, decodeMs, decodeTokens }
+  return { turns: turns.size, steps, llmMs, toolMs, ttftMs, ttftSteps }
 }
 
 /**
- * Compact token count: 517 / 12.2K / 517K / 1.2M (one decimal under three digits).
+ * Compact token count: 517 / 12.2K / 517.0K / 1.2M.
  * @param n - token count.
  * @returns display string.
  */
@@ -85,8 +74,19 @@ export function formatTokens(n: number): string {
   const scaled = (v: number): string =>
     v >= 100 ? String(Math.round(v)) : String(Math.round(v * 10) / 10)
   if (n < 1_000) return String(n)
-  if (n < 1_000_000) return `${scaled(n / 1_000)}K`
+  if (n < 1_000_000) return `${(n / 1_000).toFixed(1)}K`
   return `${scaled(n / 1_000_000)}M`
+}
+
+const fullTokenCount = new Intl.NumberFormat('en-US', { maximumFractionDigits: 0 })
+
+/**
+ * Full token count with digit grouping and no magnitude abbreviation.
+ * @param n - token count.
+ * @returns display string.
+ */
+export function formatFullTokens(n: number): string {
+  return fullTokenCount.format(n)
 }
 
 /**
@@ -163,10 +163,10 @@ export interface StatsLineProps {
 export const StatsLine = memo(function StatsLine({ useSession, useProjection, t }: StatsLineProps) {
   const settledNodes = useSession(s => s.chat.legacy.nodes)
   const usage = useProjection('tokenUsage')
-  // Every figure rides the durable sessionStats projection, so paging and
-  // compaction cannot change any of them; an assembly without the unit falls
-  // back to the window-scoped fold wholesale (same field names), paid only
-  // while no projection value is served.
+  const liveUsage = useProjection('liveTokenUsage')
+  // Counts and wall times ride the durable sessionStats projection, so paging
+  // and compaction cannot change them; an assembly without the unit falls back
+  // to the window-scoped fold, paid only while no projection value is served.
   const projected = useProjection('sessionStats')
   const stats = useMemo(() => projected ?? deriveStats(settledNodes), [projected, settledNodes])
   // Pipe-separated groups (figma stats strip); a group with no data drops out whole.
@@ -177,58 +177,38 @@ export const StatsLine = memo(function StatsLine({ useSession, useProjection, t 
     if (stats.llmMs > 0) durations.push(t('stats.llm', { duration: formatDuration(stats.llmMs) }))
     if (stats.toolMs > 0) durations.push(t('stats.toolCall', { duration: formatDuration(stats.toolMs) }))
     if (durations.length > 0) groups.push(durations.join(' · '))
-    const speeds: string[] = []
     if (stats.ttftSteps > 0) {
-      speeds.push(t('stats.ttftAverage', { duration: formatDuration(stats.ttftMs / stats.ttftSteps) }))
+      groups.push(t('stats.ttftAverage', { duration: formatDuration(stats.ttftMs / stats.ttftSteps) }))
     }
-    if (stats.decodeMs > 0) {
-      speeds.push(t('stats.tokensPerSecond', {
-        throughput: formatTokensPerSecond(stats.decodeTokens / (stats.decodeMs / 1_000)),
-      }))
-    }
-    if (speeds.length > 0) groups.push(speeds.join(' · '))
   }
   // Context occupancy deliberately lives on the composer's ContextMeter ring,
   // not here — one home per fact.
-  // Billing rides the durable projection, so these survive paging and
-  // compaction. Gated on actual token activity: a session whose steps all
-  // settled without billing (e.g. every request failed) shows its counts
-  // without a zero-token group.
-  if (usage !== undefined
-    && (billedInputTokens(usage) > 0 || usage.outputTokens > 0)) {
+  // Cache accounting is provider-owned and therefore always comes from the
+  // durable projection, even while an extension serves live estimates.
+  const displayUsage: TokenUsageProjection | LiveTokenUsageProjection | undefined = liveUsage ?? usage
+  if (usage !== undefined) {
     const cacheHit = cacheHitPercent(usage)
     if (cacheHit !== null) groups.push(t('stats.cacheHit', { percent: cacheHit }))
+  }
+  if (displayUsage !== undefined
+    && (billedInputTokens(displayUsage) > 0 || displayUsage.outputTokens > 0)) {
+    const estimate = liveUsage?.estimated === true ? '~' : ''
+    const inputTokens = billedInputTokens(displayUsage)
     groups.push(t('stats.tokens', {
-      input: formatTokens(billedInputTokens(usage)),
-      output: formatTokens(usage.outputTokens),
+      input: `${estimate}${formatTokens(inputTokens)}`,
+      output: `${estimate}${formatTokens(displayUsage.outputTokens)}`,
+      total: `${estimate}${formatFullTokens(inputTokens + displayUsage.outputTokens)}`,
     }))
   }
-  const line = groups.join(' | ')
-  // The row elides with ellipsis when overlong; a delayed hover tooltip carries
-  // the full line, enabled only while content is actually clipped.
-  const rootRef = useRef<HTMLDivElement | null>(null)
-  const [truncated, setTruncated] = useState(false)
-  useLayoutEffect(() => {
-    const el = rootRef.current
-    if (el === null) return
-    const measure = () => { setTruncated(el.scrollWidth > el.clientWidth) }
-    measure()
-    if (typeof ResizeObserver === 'undefined') return
-    const observer = new ResizeObserver(measure)
-    observer.observe(el)
-    return () => { observer.disconnect() }
-  }, [line])
   if (groups.length === 0) return null
   return (
-    <Tooltip label={line} side="top" delayMs={500} disabled={!truncated}>
-      <div ref={rootRef} className={css.root}>
-        {groups.map((group, i) => (
-          <Fragment key={group}>
-            {i > 0 && <><span className={css.sep} aria-hidden>|</span>{' '}</>}
-            <span>{group}</span>
-          </Fragment>
-        ))}
-      </div>
-    </Tooltip>
+    <div className={css.root}>
+      {groups.map((group, i) => (
+        <Fragment key={group}>
+          {i > 0 && <><span className={css.sep} aria-hidden>|</span>{' '}</>}
+          <span>{group}</span>
+        </Fragment>
+      ))}
+    </div>
   )
 })

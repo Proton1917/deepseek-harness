@@ -14,11 +14,10 @@
  * (`deriveStats` in dsh-client-ui-conversation, that fold's whole-window
  * fallback role): model time is `step/start` → `assistant/message`, first
  * token is the first non-empty delta chunk and survives an in-step
- * `llm/retry`, decode spans first token → assembled message on steps that
- * also report output tokens, and tool time pairs `tool/call` → `tool/result`
- * by callId. A cancelled step assembles no message, so its partial stream
- * time stays uncounted in every time figure — matching the window, which
- * renders it as an untimed interrupted node.
+ * `llm/retry`, and tool time pairs `tool/call` → `tool/result` by callId. A
+ * cancelled step assembles no message, so its partial stream time stays
+ * uncounted in every time figure — matching the window, which renders it as
+ * an untimed interrupted node.
  *
  * @module @deepseek-ai/dsh-session-stats/projection
  */
@@ -41,10 +40,6 @@ interface SessionStatsTotals {
   ttftMs: number
   /** Steps carrying a recorded first token. */
   ttftSteps: number
-  /** Summed decode wall time over usage-reporting steps, ms. */
-  decodeMs: number
-  /** Summed provider output tokens over the same steps. */
-  decodeTokens: number
 }
 
 /**
@@ -69,21 +64,7 @@ const sessionStatsSchema = z.object({
   toolMs: z.number().nonnegative(),
   ttftMs: z.number().nonnegative(),
   ttftSteps: z.number().int().nonnegative(),
-  decodeMs: z.number().nonnegative(),
-  decodeTokens: z.number().nonnegative(),
 }).strict()
-
-/**
- * Provider-reported completion tokens, guarded the way the window fold guards
- * node usage.
- * @param usage - the assistant/message event's optional usage record.
- * @returns the output-token count, or null when unreported or invalid.
- */
-function usageOutputTokens(usage: unknown): number | null {
-  if (typeof usage !== 'object' || usage === null) return null
-  const value = (usage as { outputTokens?: unknown }).outputTokens
-  return typeof value === 'number' && Number.isFinite(value) && value >= 0 ? value : null
-}
 
 /** The `sessionStats` unit registered on `ctx.sessionProjections` (exported for the unit spec). */
 export const sessionStatsProjectionDefinition: ProjectionDefinition<'sessionStats', SessionStatsState> = {
@@ -96,8 +77,6 @@ export const sessionStatsProjectionDefinition: ProjectionDefinition<'sessionStat
     toolMs: 0,
     ttftMs: 0,
     ttftSteps: 0,
-    decodeMs: 0,
-    decodeTokens: 0,
     lastTurn: null,
     openStep: null,
     pendingCalls: {},
@@ -129,11 +108,6 @@ export const sessionStatsProjectionDefinition: ProjectionDefinition<'sessionStat
         if (open.firstTokenTime !== null) {
           next.ttftMs += Math.max(0, open.firstTokenTime - open.startTime)
           next.ttftSteps += 1
-          const outputTokens = usageOutputTokens(event.data.usage)
-          if (outputTokens !== null) {
-            next.decodeMs += Math.max(0, event.time - open.firstTokenTime)
-            next.decodeTokens += outputTokens
-          }
         }
         return next
       }
@@ -176,8 +150,6 @@ export const sessionStatsProjectionDefinition: ProjectionDefinition<'sessionStat
     toolMs: state.toolMs,
     ttftMs: state.ttftMs,
     ttftSteps: state.ttftSteps,
-    decodeMs: state.decodeMs,
-    decodeTokens: state.decodeTokens,
   }),
-  stateVersion: 1,
+  stateVersion: 2,
 }
