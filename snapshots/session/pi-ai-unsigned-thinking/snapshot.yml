@@ -1,0 +1,9 @@
+version: 1
+scenario: pi-ai-unsigned-thinking
+profile: headless
+composition: default
+recording: live
+platform: posix
+header:
+  class: pi-ai-unsigned-thinking
+  pin: true

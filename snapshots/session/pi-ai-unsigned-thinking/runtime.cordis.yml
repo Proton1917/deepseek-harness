@@ -1,0 +1,43 @@
+- id: llm-deepseek
+  disabled: true
+
+- id: tool-web
+  config:
+    search: false
+    fetch: true
+    searchTimeoutMs: 60000
+
+- id: llm-pi-ai
+  disabled: !!js process.env.DSH_SNAPSHOT !== 'record'
+  config:
+    providers:
+      openrouter:
+        api: anthropic-messages
+        apiKeyEnv: OPENROUTER_API_KEY
+        baseURL: !!js process.env.DSH_PI_AI_SNAPSHOT_BASE_URL ?? 'https://openrouter.ai/api'
+        headers: !!js JSON.parse(process.env.DSH_PI_AI_SNAPSHOT_HEADERS ?? '{}')
+        models:
+          - id: !!js "process.env.DSH_PI_AI_SNAPSHOT_MODEL ?? (process.env.DSH_SNAPSHOT === 'record' ? 'deepseek/deepseek-v4.1-flash-1017' : process.env.DSH_SNAPSHOT_MODEL)"
+            contextWindow: 1000000
+            maxTokens: 4096
+            reasoningEfforts:
+              high: high
+
+- id: llm-replay
+  name: '@deepseek-ai/dsh-llm-replay'
+  disabled: !!js process.env.DSH_SNAPSHOT === 'record'
+  config:
+    providers:
+      - id: openrouter
+        name: OpenRouter
+        models:
+          - id: !!js "process.env.DSH_PI_AI_SNAPSHOT_MODEL ?? (process.env.DSH_SNAPSHOT === 'record' ? 'deepseek/deepseek-v4.1-flash-1017' : process.env.DSH_SNAPSHOT_MODEL)"
+            contextWindow: 1000000
+            defaultMaxTokens: 4096
+            reasoningEfforts: [high]
+
+- id: agent-default-model
+  config:
+    provider: openrouter
+    model: !!js "process.env.DSH_PI_AI_SNAPSHOT_MODEL ?? (process.env.DSH_SNAPSHOT === 'record' ? 'deepseek/deepseek-v4.1-flash-1017' : process.env.DSH_SNAPSHOT_MODEL)"
+    reasoningEffort: high

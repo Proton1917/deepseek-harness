@@ -131,11 +131,10 @@ export interface PiAiProviderProfile {
    */
   modelOverrides?: Record<string, PiAiModelOverride>
   /**
-   * pi-ai wire-compatibility switches defaulting every model on this route
-   * whose protocol declares them; each model's own `compat` overrides per
-   * field. What neither sets keeps the installed catalog entry's value, then
-   * pi-ai's own detection. A switch no model on the route could read is
-   * refused rather than left looking applied.
+   * 该路由的协议兼容配置，只应用于协议支持对应字段的模型。
+   * 每个模型的 `compat` 按字段覆盖路由配置，随后采用已安装目录的值。
+   * Anthropic Messages 的空签名 thinking 默认保留原类型，其余字段由 pi-ai 检测。
+   * 路由内须有支持所配置字段的模型。
    */
   compat?: PiAiCompatProfile
   /**
