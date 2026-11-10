@@ -454,7 +454,7 @@ export interface PiAiCompatProfile {
   supportsTemperature?: boolean
   /** Whether to force adaptive thinking regardless of model id; `anthropic-messages`. */
   forceAdaptiveThinking?: boolean
-  /** Whether to replay an empty thinking signature instead of converting thinking to text; `anthropic-messages`. */
+  /** 是否保留空签名的 thinking 块；`anthropic-messages` 默认启用。 */
   allowEmptySignature?: boolean
   /** Whether the endpoint accepts Anthropic strict tool schemas; `anthropic-messages`. */
   supportsStrictTools?: boolean
@@ -777,16 +777,10 @@ function resolveModelReasoning(
 type ModelCompat = OpenAICompletionsCompat | OpenAIResponsesCompat | AnthropicMessagesCompat | BedrockCompat | MistralConversationsCompat
 
 /**
- * Resolve one model's compat block from the profile's switches.
- *
- * A model switch wins over the route switch field by field; whatever neither
- * sets keeps the installed entry's value, and a field no layer decides falls
- * through to pi-ai's own detection. A model-level switch its protocol does not
- * take fails resolution — about one named model it can only be a mistake —
- * while a route-level one skips past such models, since a route default must
- * stay settable on a route whose models do not all speak one protocol. Every
- * field reaching here is offered by some protocol; {@link
- * assertOfferedCompatFields} has already refused the rest.
+ * 按模型配置、路由配置、已安装目录的优先级解析兼容字段。
+ * Anthropic Messages 的空签名 thinking 默认保留原类型，其余缺省字段由 pi-ai 检测。
+ * 模型配置中的字段须由该模型的协议支持；路由配置只应用于支持该字段的模型。
+ * {@link assertOfferedCompatFields} 已检查字段是否属于可配置集合。
  * @param provider - provider route key, for diagnostics.
  * @param entry - the configured model entry.
  * @param route - the route-level switches, when any.
@@ -816,7 +810,7 @@ function resolveModelCompat(
     }
     configured[field] = value
   }
-  if (Object.keys(configured).length === 0) return {}
+  if (Object.keys(configured).length === 0 && api !== 'anthropic-messages') return {}
   // The installed entry's compat matches the entry's OWN api — a route-level
   // `api` repoint (an anthropic catalog served through an OpenAI-compatible
   // gateway) leaves `base.compat` in the other protocol's shape, so it is
@@ -824,7 +818,13 @@ function resolveModelCompat(
   // model starts from pi-ai's baseURL-derived detection instead, which is
   // what a protocol change means for every other compat field too.
   const inherited = base?.api === api ? base.compat : undefined
-  return { compat: { ...inherited, ...configured } as ModelCompat }
+  return {
+    compat: {
+      ...api === 'anthropic-messages' ? { allowEmptySignature: true } : {},
+      ...inherited,
+      ...configured,
+    } as ModelCompat,
+  }
 }
 
 /** One route's materialized catalog, plus the request caps its profile chose. */

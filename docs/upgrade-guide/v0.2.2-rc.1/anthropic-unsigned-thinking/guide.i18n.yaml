@@ -1,0 +1,16 @@
+# Bilingual-pair consistency record for guide.md (docs/i18n/README.md): per heading
+# section, a hash of its English and Chinese blocks outside code blocks and generated regions.
+# After editing either side, bring the other along and re-record with:
+#   pnpm run verify-translation-pairing --write docs/upgrade-guide/v0.2.2-rc.1/anthropic-unsigned-thinking/guide.md
+/:
+  en: bd83835d10da9ce0
+  zh: 6371ead19869698d
+/anthropic-messages-unsigned-thinking:
+  en: 59d1fbf2ef3b1989
+  zh: b5d65325be2f79a4
+/anthropic-messages-unsigned-thinking/change:
+  en: 3954d12b046e8fbc
+  zh: 60393fa60d4fb5e6
+/anthropic-messages-unsigned-thinking/migration:
+  en: f6b4ace36b25cbc9
+  zh: e06af42a43cdc5cd

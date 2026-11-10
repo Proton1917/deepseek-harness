@@ -1954,7 +1954,7 @@ export interface Config extends ProtocolConfig, ModelListingConfig {
 
 - `inject`: `llm`
 - `refs`: `Api` (`@earendil-works/pi-ai`) · `CacheRetention` (`@earendil-works/pi-ai`) · `Model` (`@earendil-works/pi-ai`) · `ModelThinkingLevel` (`@earendil-works/pi-ai`) · `OpenAICompletionsCompat` (`@earendil-works/pi-ai`) · [`RetryPolicyConfig`](../packages/llm/llm/src/index.ts) · `ThinkingBudgets` (`@earendil-works/pi-ai`) · `Transport` (`@earendil-works/pi-ai`) · `Volatile` (`@deepseek-ai/cordis`)
-- `source`: [`packages/llm/llm-pi-ai/src/config.ts:251`](../packages/llm/llm-pi-ai/src/config.ts)
+- `source`: [`packages/llm/llm-pi-ai/src/config.ts:250`](../packages/llm/llm-pi-ai/src/config.ts)
 
 ```ts config-catalog
 /** Plugin configuration: the provider routes this instance owns. */
@@ -1997,11 +1997,10 @@ export interface PiAiProviderProfile {
    */
   modelOverrides?: Record<string, PiAiModelOverride>
   /**
-   * pi-ai wire-compatibility switches defaulting every model on this route
-   * whose protocol declares them; each model's own `compat` overrides per
-   * field. What neither sets keeps the installed catalog entry's value, then
-   * pi-ai's own detection. A switch no model on the route could read is
-   * refused rather than left looking applied.
+   * 该路由的协议兼容配置，只应用于协议支持对应字段的模型。
+   * 每个模型的 `compat` 按字段覆盖路由配置，随后采用已安装目录的值。
+   * Anthropic Messages 的空签名 thinking 默认保留原类型，其余字段由 pi-ai 检测。
+   * 路由内须有支持所配置字段的模型。
    */
   compat?: PiAiCompatProfile
   /**
@@ -2207,7 +2206,7 @@ export interface PiAiCompatProfile {
   supportsTemperature?: boolean
   /** Whether to force adaptive thinking regardless of model id; `anthropic-messages`. */
   forceAdaptiveThinking?: boolean
-  /** Whether to replay an empty thinking signature instead of converting thinking to text; `anthropic-messages`. */
+  /** 是否保留空签名的 thinking 块；`anthropic-messages` 默认启用。 */
   allowEmptySignature?: boolean
   /** Whether the endpoint accepts Anthropic strict tool schemas; `anthropic-messages`. */
   supportsStrictTools?: boolean
